@@ -1,3 +1,4 @@
+#![allow(clippy::all)]
 use ocelot::oprf::{KmprtReceiver, KmprtSender};
 use rand::Rng;
 use scuttlebutt::{channel::track_unix_channel_pair, AesRng, Block, Block512};
@@ -25,7 +26,7 @@ fn run(ninputs: usize, npoints: usize) {
             start.elapsed().unwrap().as_millis()
         );
         let start = SystemTime::now();
-        let _ = oprf.send(&mut sender, &points, ninputs, &mut rng).unwrap();
+        oprf.send(&mut sender, &points, ninputs, &mut rng).unwrap();
         println!(
             "Sender send time: {} ms",
             start.elapsed().unwrap().as_millis()

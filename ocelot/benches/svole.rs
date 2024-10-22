@@ -1,15 +1,13 @@
+#![allow(clippy::all)]
 //! Subfield vector oblivious linear evaluation benchmarks using `criterion`.
 
 // TODO: criterion might not be the best choice for larger benchmarks.
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ocelot::svole::wykw::{LPN_EXTEND_MEDIUM, LPN_SETUP_MEDIUM};
-use ocelot::svole::{
-    wykw::{Receiver, Sender},
-    SVoleReceiver, SVoleSender,
-};
+use ocelot::svole::{Receiver, Sender};
+use ocelot::svole::{LPN_EXTEND_MEDIUM, LPN_SETUP_MEDIUM};
 
 use scuttlebutt::{
-    field::{F128b, F61p},
+    field::{F128b, F61p, FiniteField},
     AesRng, Channel,
 };
 use std::{
@@ -23,36 +21,36 @@ use std::{
 /*#[path = "../src/svole/wykw/ggm_utils.rs"]
 mod ggm_utils;*/
 
-fn svole_init<
-    VSender: SVoleSender + Sync + Send + 'static,
-    VReceiver: SVoleReceiver + Sync + Send,
->() -> (Arc<Mutex<VSender>>, Arc<Mutex<VReceiver>>) {
+fn svole_init<F: FiniteField>() -> (Arc<Mutex<Sender<F>>>, Arc<Mutex<Receiver<F>>>) {
     let (sender, receiver) = UnixStream::pair().unwrap();
     let handle = std::thread::spawn(move || {
         let mut rng = AesRng::new();
         let reader = BufReader::new(sender.try_clone().unwrap());
         let writer = BufWriter::new(sender);
         let mut channel = Channel::new(reader, writer);
-        VSender::init(&mut channel, &mut rng, LPN_SETUP_MEDIUM, LPN_EXTEND_MEDIUM).unwrap()
+        Sender::init(&mut channel, &mut rng, LPN_SETUP_MEDIUM, LPN_EXTEND_MEDIUM).unwrap()
     });
     let mut rng = AesRng::new();
     let reader = BufReader::new(receiver.try_clone().unwrap());
     let writer = BufWriter::new(receiver);
     let mut channel = Channel::new(reader, writer);
-    let vole_receiver =
-        VReceiver::init(&mut channel, &mut rng, LPN_SETUP_MEDIUM, LPN_EXTEND_MEDIUM).unwrap();
+    let vole_receiver = Receiver::init(
+        &mut channel,
+        &mut rng,
+        LPN_SETUP_MEDIUM,
+        LPN_EXTEND_MEDIUM,
+        None,
+    )
+    .unwrap();
     let vole_sender = handle.join().unwrap();
     let vole_sender = Arc::new(Mutex::new(vole_sender));
     let vole_receiver = Arc::new(Mutex::new(vole_receiver));
     (vole_sender, vole_receiver)
 }
 
-fn bench_svole<
-    VSender: SVoleSender + Sync + Send + 'static,
-    VReceiver: SVoleReceiver + Sync + Send,
->(
-    vole_sender: &Arc<Mutex<VSender>>,
-    vole_receiver: &Arc<Mutex<VReceiver>>,
+fn bench_svole<F: FiniteField>(
+    vole_sender: &Arc<Mutex<Sender<F>>>,
+    vole_receiver: &Arc<Mutex<Receiver<F>>>,
 ) {
     let (sender, receiver) = UnixStream::pair().unwrap();
     let vole_sender = vole_sender.clone();
@@ -62,7 +60,7 @@ fn bench_svole<
         let writer = BufWriter::new(sender);
         let mut channel = Channel::new(reader, writer);
         let mut vole_sender = vole_sender.lock().unwrap();
-        let mut out = Vec::new();
+        let mut out: Vec<(F::PrimeField, F)> = Vec::new();
         vole_sender.send(&mut channel, &mut rng, &mut out).unwrap();
         black_box(out);
     });
@@ -73,7 +71,7 @@ fn bench_svole<
     let mut vole_receiver = vole_receiver.lock().unwrap();
     let mut out = Vec::new();
     vole_receiver
-        .receive(&mut channel, &mut rng, &mut out)
+        .receive::<_, F::PrimeField>(&mut channel, &mut rng, &mut out)
         .unwrap();
     black_box(out);
     handle.join().unwrap();
@@ -83,7 +81,7 @@ fn bench_svole_gf128(c: &mut Criterion) {
     c.bench_function("svole::extend::Gf128", move |bench| {
         let (vole_sender, vole_receiver) = svole_init();
         bench.iter(move || {
-            bench_svole::<Sender<F128b>, Receiver<F128b>>(&vole_sender, &vole_receiver);
+            bench_svole::<F128b>(&vole_sender, &vole_receiver);
         })
     });
 }
@@ -92,11 +90,11 @@ fn bench_svole_f61p(c: &mut Criterion) {
     c.bench_function("svole::extend::F61p", move |bench| {
         let (vole_sender, vole_receiver) = svole_init();
         bench.iter(move || {
-            bench_svole::<Sender<F61p>, Receiver<F61p>>(&vole_sender, &vole_receiver);
+            bench_svole::<F61p>(&vole_sender, &vole_receiver);
         })
     });
 }
-fn bench_svole_init<VSender: SVoleSender + Sync + Send + 'static, VReceiver: SVoleReceiver>() {
+fn bench_svole_init<F: FiniteField>() {
     let mut rng = AesRng::new();
     let (sender, receiver) = UnixStream::pair().unwrap();
     let handle = std::thread::spawn(move || {
@@ -105,14 +103,21 @@ fn bench_svole_init<VSender: SVoleSender + Sync + Send + 'static, VReceiver: SVo
         let writer = BufWriter::new(sender);
         let mut channel = Channel::new(reader, writer);
         black_box(
-            VSender::init(&mut channel, &mut rng, LPN_SETUP_MEDIUM, LPN_EXTEND_MEDIUM).unwrap(),
+            Sender::<F>::init(&mut channel, &mut rng, LPN_SETUP_MEDIUM, LPN_EXTEND_MEDIUM).unwrap(),
         )
     });
     let reader = BufReader::new(receiver.try_clone().unwrap());
     let writer = BufWriter::new(receiver);
     let mut channel = Channel::new(reader, writer);
     black_box(
-        VReceiver::init(&mut channel, &mut rng, LPN_SETUP_MEDIUM, LPN_EXTEND_MEDIUM).unwrap(),
+        Receiver::<F>::init(
+            &mut channel,
+            &mut rng,
+            LPN_SETUP_MEDIUM,
+            LPN_EXTEND_MEDIUM,
+            None,
+        )
+        .unwrap(),
     );
     handle.join().unwrap();
 }
@@ -120,7 +125,7 @@ fn bench_svole_init<VSender: SVoleSender + Sync + Send + 'static, VReceiver: SVo
 fn bench_svole_init_gf128(c: &mut Criterion) {
     c.bench_function("svole::init::Gf128", move |bench| {
         bench.iter(move || {
-            bench_svole_init::<Sender<F128b>, Receiver<F128b>>();
+            bench_svole_init::<F128b>();
         });
     });
 }
@@ -128,7 +133,7 @@ fn bench_svole_init_gf128(c: &mut Criterion) {
 fn bench_svole_init_f61p(c: &mut Criterion) {
     c.bench_function("svole::init::F61p", move |bench| {
         bench.iter(move || {
-            bench_svole_init::<Sender<F61p>, Receiver<F61p>>();
+            bench_svole_init::<F61p>();
         })
     });
 }

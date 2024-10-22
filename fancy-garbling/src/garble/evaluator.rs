@@ -12,12 +12,14 @@ use crate::{
 use scuttlebutt::{AbstractChannel, Block};
 use subtle::ConditionallySelectable;
 
+use super::security_warning::warn_proj;
+
 /// Streaming evaluator using a callback to receive ciphertexts as needed.
 ///
 /// Evaluates a garbled circuit on the fly, using messages containing ciphertexts and
 /// wires. Parallelizable.
 pub struct Evaluator<C, Wire> {
-    channel: C,
+    pub(crate) channel: C,
     current_gate: usize,
     current_output: usize,
     _phantom: PhantomData<Wire>,
@@ -83,15 +85,14 @@ impl<C: AbstractChannel, Wire: WireLabel> Evaluator<C, Wire> {
             2,
         );
 
-        let res = L.plus_mov(&R.plus_mov(&A.cmul(B.color())));
-        res
+        L.plus_mov(&R.plus_mov(&A.cmul(B.color())))
     }
 }
 
 impl<C: AbstractChannel> FancyBinary for Evaluator<C, WireMod2> {
     /// Negate is a noop for the evaluator
     fn negate(&mut self, x: &Self::Item) -> Result<Self::Item, Self::Error> {
-        Ok(x.clone())
+        Ok(*x)
     }
 
     fn xor(&mut self, x: &Self::Item, y: &Self::Item) -> Result<Self::Item, Self::Error> {
@@ -216,6 +217,7 @@ impl<C: AbstractChannel, Wire: WireLabel + ArithmeticWire> FancyArithmetic for E
     }
 
     fn proj(&mut self, x: &Wire, q: u16, _: Option<Vec<u16>>) -> Result<Wire, EvaluatorError> {
+        warn_proj();
         let ngates = (x.modulus() - 1) as usize;
         let mut gate = Vec::with_capacity(ngates);
         for _ in 0..ngates {

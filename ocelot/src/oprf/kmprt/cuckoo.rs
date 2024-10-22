@@ -1,4 +1,5 @@
-use scuttlebutt::{Aes128, Block};
+use scuttlebutt::Block;
+use vectoreyes::{Aes128EncryptOnly, AesBlockCipher};
 
 #[derive(Clone, Debug)]
 pub struct Item {
@@ -40,8 +41,8 @@ impl CuckooHash {
 
         let hashkeys = hashkeys
             .iter()
-            .map(|k| Aes128::new(*k))
-            .collect::<Vec<Aes128>>();
+            .map(|k| Aes128EncryptOnly::new_with_key(*k))
+            .collect::<Vec<Aes128EncryptOnly>>();
         // Fill table with `inputs`
 
         for (j, input) in inputs.iter().enumerate() {
@@ -57,7 +58,7 @@ impl CuckooHash {
 
     fn _hash(
         &mut self,
-        hashkeys: &[Aes128],
+        hashkeys: &[Aes128EncryptOnly],
         entry: Block,
         index: usize,
         h: usize,
@@ -89,7 +90,12 @@ impl CuckooHash {
         Some((entry, index))
     }
 
-    fn hash(&mut self, hashkeys: &[Aes128], entry: Block, index: usize) -> Result<(), Error> {
+    fn hash(
+        &mut self,
+        hashkeys: &[Aes128EncryptOnly],
+        entry: Block,
+        index: usize,
+    ) -> Result<(), Error> {
         // Try to place in the first `m₁` bins.
         match self._hash(hashkeys, entry, index, self.hs.0, 0, self.ms.0, 0) {
             None => Ok(()),
@@ -103,41 +109,5 @@ impl CuckooHash {
                 }
             }
         }
-    }
-}
-
-//
-// Benchmarks.
-//
-
-#[cfg(all(feature = "nightly", test))]
-mod benchmarks {
-    extern crate test;
-    use super::*;
-    use test::{black_box, Bencher};
-
-    const SET_SIZE: usize = 1 << 12;
-
-    #[bench]
-    fn bench_build(b: &mut Bencher) {
-        let inputs = black_box(
-            (0..SET_SIZE)
-                .map(|_| rand::random::<Block>())
-                .collect::<Vec<Block>>(),
-        );
-        let params = super::super::Parameters::new(inputs.len()).unwrap();
-        let hashkeys = black_box(
-            (0..params.h1 + params.h2)
-                .map(|_| rand::random::<Block>())
-                .collect::<Vec<Block>>(),
-        );
-        b.iter(|| {
-            CuckooHash::build(
-                &inputs,
-                &hashkeys,
-                (params.m1, params.m2),
-                (params.h1, params.h2),
-            )
-        });
     }
 }

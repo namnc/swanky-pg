@@ -2,6 +2,7 @@
 
 mod evaluator;
 mod garbler;
+mod security_warning;
 
 pub use crate::garble::{evaluator::Evaluator, garbler::Garbler};
 
@@ -65,7 +66,7 @@ mod nonstreaming {
     fn add_many() {
         garble_test_helper(|q| {
             let mut b = CircuitBuilder::new();
-            let xs = b.evaluator_inputs(&vec![q; 16]);
+            let xs = b.evaluator_inputs(&[q; 16]);
             let z = b.add_many(&xs).unwrap();
             b.output(&z).unwrap();
             b.finish()
@@ -76,7 +77,7 @@ mod nonstreaming {
     fn or_many() {
         garble_test_helper(|_| {
             let mut b: CircuitBuilder<ArithmeticCircuit> = CircuitBuilder::new();
-            let xs = b.evaluator_inputs(&vec![2; 16]);
+            let xs = b.evaluator_inputs(&[2; 16]);
             let z = b.or_many(&xs).unwrap();
             b.output(&z).unwrap();
             b.finish()
@@ -167,7 +168,7 @@ mod nonstreaming {
 
     #[test] // half_gate_unequal_mods
     fn half_gate_unequal_mods() {
-        let mut rng = AesRng::from_seed(Block::from(0 as u128));
+        let mut rng = AesRng::from_seed(Block::from(0_u128));
         for q in 3..16 {
             let ymod = 2 + rng.gen_u16() % 6; // lower mod is capped at 8 for now
             println!("\nTESTING MOD q={} ymod={}", q, ymod);

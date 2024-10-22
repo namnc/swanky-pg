@@ -1,25 +1,17 @@
+#![deny(missing_docs)]
 //! VectorEyes is a (almost entirely) safe wrapper library around vectorized operations.
 //!
 //! # Backends
 //! VectorEyes chooses what backend to execute vector operations with at compile-time.
 //! ## AVX2
-//! CPUs that support the `AVX`, `AVX2`, `SSE4.1`, `AES`, `SSE4.2`, and `PCLMULQDQ` features will
-//! use the `AVX2` backend.
+//! x86-64 CPUs that support the `AVX`, `AVX2`, `SSE4.1`, `AES`, `SSE4.2`, and `PCLMULQDQ` features
+//! will use the `AVX2` backend.
 //!
-//! In addition, we have embedded specific latency numbers for:
+//! ## Neon
+//! This is available on aarch64/arm64 machines with `neon` and `aes` features.
 //!
-//! * `skylake`
-//! * `skylake-avx512`
-//! * `cascadelake`
-//! * `znver1`
-//! * `znver2`
-//! * `znver3`
-//!
-//! As a result, `vectoreyes` will be more efficient on these platforms. You can add specific
-//! latency numbers for more targets in `avx2.py`.
 //! ## Scalar
-//! At the moment, this is the only alternative to the `AVX2` backend. It is not particularly
-//! optimized.
+//! This is a fallback implementation that works on all CPUs. It's not particularlly performant.
 //!
 //! # Cargo Configuration
 //! ## Native CPU Setup
@@ -45,29 +37,35 @@
 //! consult the Intel documentation to see if a non-implemented intrinsic would
 //! more directly accomplish your goal, and we can add it!
 
-// TODO: support more fine-grained cpu features?
-
 use std::ops::*;
 
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MicroArchitecture {
-    Skylake,
-    SkylakeAvx512,
-    CascadeLake,
-    AmdZenVer1,
-    AmdZenVer2,
-    AmdZenVer3,
-    Unknown,
-}
-
+/// What backend will be used when targeting the current CPU?
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VectorBackend {
+    /// The fallback scalar backend (doesn't use vector instructions)
     Scalar,
-    Avx2 {
-        micro_architecture: MicroArchitecture,
-    },
+    /// A vector backend targeting [AVX2](https://en.wikipedia.org/wiki/Advanced_Vector_Extensions#Advanced_Vector_Extensions_2)
+    Avx2,
+    /// A vector backend targeting [ARM Neon](https://developer.arm.com/Architectures/Neon).
+    Neon,
+}
+
+/// The vector backend that this process is using.
+pub const VECTOR_BACKEND: VectorBackend = current_vector_backend();
+
+/// Panic if the current binary uses features unsupported by the current CPU.
+///
+/// Vectoreyes uses compile-time flags to select which backend to use and which CPU features to
+/// require. If this backend is used on an unsupported CPU, it will result in an "Illegal
+/// instruction" error (technically, _all_ Rust code--not even just vectoreyes code--may result in
+/// undefined behavior if run on a CPU that doesn't support the compile-time selected feature
+/// flags).
+///
+/// It would be advisable to call this in the `main()` function of executables to try to catch
+/// these errors early.
+pub fn assert_cpu_features() {
+    vector_backend_check_cpu()
 }
 
 /// A scalar that can live in the lane of a vector.
@@ -122,6 +120,10 @@ scalar_impls!((i64, u64), (i32, u32), (i16, u16), (i8, u8));
 ///
 /// Note that each implemented method shows an equivalent scalar implementation.
 ///
+/// # Representation
+/// This type should have the same size as `[T; Self::Lanes]`, though it may have increased
+/// alignment requirements.
+///
 /// # Effects of Signedness on shift operations
 /// When `Scalar` is _signed_, this will shift in sign bits, as opposed to zeroes.
 pub trait SimdBase:
@@ -157,6 +159,8 @@ pub trait SimdBase:
     + Shr<Self, Output = Self>
     + subtle::ConstantTimeEq
     + subtle::ConditionallySelectable
+    + AsRef<[Self::Scalar]>
+    + AsMut<[Self::Scalar]>
 {
     /// The number of elements of this vector.
     ///
@@ -192,7 +196,9 @@ pub trait SimdBase:
         + From<Self>
         + Into<Self>;
 
+    /// A vector where every element is zero.
     const ZERO: Self;
+    /// Is `self == Self::ZERO`?
     fn is_zero(&self) -> bool;
 
     /// Create a new vector by setting element 0 to `value`, and the rest of the elements to `0`.
@@ -201,6 +207,7 @@ pub trait SimdBase:
     /// Create a new vector by setting every element to `value`.
     fn broadcast(value: Self::Scalar) -> Self;
 
+    /// A vector of `[Self::Scalar; 128 / (8 * std::mem::size_of::<Self::Scalar>())]`
     type BroadcastLoInput: SimdBase<Scalar = Self::Scalar>;
     /// Create a vector by setting every element to element 0 of `of`.
     fn broadcast_lo(of: Self::BroadcastLoInput) -> Self;
@@ -241,10 +248,17 @@ pub trait SimdBase:
     fn min(&self, other: Self) -> Self;
 }
 
+/// A vector supporting the gather operation.
 pub trait SimdBaseGatherable<IV: SimdBase>: SimdBase {
     /// Construct a vector by accessing values at `base + indices[i]`
+    ///
+    /// # Safety
+    /// This operation is safe if `std::ptr::read(base.add(indices[i]))` is safe for all `i`
     unsafe fn gather(base: *const Self::Scalar, indices: IV) -> Self;
     /// Construct a vector by accessing values at `base + indices[i]`, only if the mask is set.
+    ///
+    /// # Safety
+    /// This operation is safe if `std::ptr::read(base.add(indices[i]))` is safe for all `i`
     unsafe fn gather_masked(base: *const Self::Scalar, indices: IV, mask: Self, src: Self) -> Self;
 }
 
@@ -277,8 +291,16 @@ pub trait SimdBase8x: SimdBase {
     ) -> Self;
 }
 
+/// A vector supporting saturating arithmetic on each entry
+pub trait SimdSaturatingArithmetic: SimdBase {
+    /// Pairwise add vectors. On overflow, the entry's value goes to the maximum scalar value.
+    fn saturating_add(&self, other: Self) -> Self;
+    /// Pairwise add vectors. On overflow, the entry's value goes to the minimum scalar value.
+    fn saturating_sub(&self, other: Self) -> Self;
+}
+
 /// A vector containing 8-bit values.
-pub trait SimdBase8: SimdBase
+pub trait SimdBase8: SimdBase + SimdSaturatingArithmetic
 where
     Self::Scalar: Scalar<Unsigned = u8, Signed = i8>,
 {
@@ -288,6 +310,21 @@ where
     fn shift_bytes_right<const AMOUNT: usize>(&self) -> Self;
     /// Get the sign/most significant bits of the elements of the vector.
     fn most_significant_bits(&self) -> u32;
+}
+
+/// A vector containing 16-bit values.
+pub trait SimdBase16: SimdBase + SimdSaturatingArithmetic
+where
+    Self::Scalar: Scalar<Unsigned = u16, Signed = i16>,
+{
+    /// Shuffle within the lower 64-bits of each 128-bit lane.
+    fn shuffle_lo<const I3: usize, const I2: usize, const I1: usize, const I0: usize>(
+        &self,
+    ) -> Self;
+    /// Shuffle within the upper 64-bits of each 128-bit lane.
+    fn shuffle_hi<const I3: usize, const I2: usize, const I1: usize, const I0: usize>(
+        &self,
+    ) -> Self;
 }
 
 /// A vector containing 32-bit values.
@@ -332,6 +369,7 @@ pub trait ExtendingCast<T: SimdBase>: SimdBase {
 
 /// A utility trait you probably won't need to use. See [Simd].
 pub trait HasVector<const N: usize>: Scalar {
+    /// The vector of `[Self; N]`
     type Vector: SimdBase<Scalar = Self>;
 }
 
@@ -344,7 +382,12 @@ pub trait HasVector<const N: usize>: Scalar {
 /// ```
 pub type Simd<T, const N: usize> = <T as HasVector<N>>::Vector;
 
+/// An AES block cipher, suitable for encryption
+///
+/// This cipher can be used for encryption. Decryption operations are handled in the subtrait
+/// [`AesBlockCipherDecrypt`].
 pub trait AesBlockCipher: 'static + Clone + Sync + Send {
+    /// The type of the AES key.
     type Key: 'static + Clone + Sync + Send;
 
     /// If you don't need to use Aes for decryption, it's faster to only perform key scheduling
@@ -354,34 +397,58 @@ pub trait AesBlockCipher: 'static + Clone + Sync + Send {
     /// A pre-scheduled Aes block cipher with a compile-time constant key.
     const FIXED_KEY: Self;
 
-    /// Running `encrypt_many` with this many blocks will result in the best performance.
-    ///
-    /// When using hardware AES instructions, if the AES encrypt instructions all have a
-    /// throughput of 1, then this constant will be equal to the instruction latency.
+    /// Running `encrypt_many` with this many blocks will typically result in good
+    /// performance.
     const BLOCK_COUNT_HINT: usize;
 
     /// If you need to AES with a particular key, be careful about endianness issues.
     fn new_with_key(key: Self::Key) -> Self;
 
+    /// AES-ECB encrypt `block`
     #[inline(always)]
     fn encrypt(&self, block: U8x16) -> U8x16 {
         self.encrypt_many([block])[0]
     }
+    /// AES-ECB encrypt `blocks`
     fn encrypt_many<const N: usize>(&self, blocks: [U8x16; N]) -> [U8x16; N]
     where
         array_utils::ArrayUnrolledOps: array_utils::UnrollableArraySize<N>;
 }
 
+/// An AES block cipher, suitable for encryption and decryption
 pub trait AesBlockCipherDecrypt: AesBlockCipher {
+    /// AES-ECB decrypt `block`
     #[inline(always)]
     fn decrypt(&self, block: U8x16) -> U8x16 {
         self.decrypt_many([block])[0]
     }
+    /// AES-ECB decrypt `blocks`
     fn decrypt_many<const N: usize>(&self, blocks: [U8x16; N]) -> [U8x16; N]
     where
         array_utils::ArrayUnrolledOps: array_utils::UnrollableArraySize<N>;
 }
 
 pub mod array_utils;
+mod utils;
+
+// We want to allow `which_lane * 0 + 0` expressions.
+// These also allow for simpler generated code. For example, sometimes we have code which looks
+// like:
+//    let x: {{ty}};
+//    x as u8
+// When {{ty}} _is_ u8, this cast isn't neccessary. But it's simpler to always insert it in the
+// generated code.
+#[allow(
+    clippy::identity_op,
+    clippy::erasing_op,
+    clippy::unnecessary_cast,
+    clippy::useless_conversion
+)]
+// intel intrinsics have many arguments
+#[allow(clippy::too_many_arguments)]
+// our compressed code doesn't have newlines
+#[allow(clippy::suspicious_else_formatting)]
+// You can't put inline(always) without a closure
+#[allow(clippy::redundant_closure)]
 mod generated;
 pub use generated::implementation::*;

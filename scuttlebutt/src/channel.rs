@@ -12,7 +12,6 @@ pub use track_channel::TrackChannel;
 pub use unix_channel::{track_unix_channel_pair, unix_channel_pair, TrackUnixChannel, UnixChannel};
 
 use crate::{serialization::CanonicalSerialize, Block, Block512};
-#[cfg(feature = "curve25519-dalek")]
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use generic_array::GenericArray;
 use std::{
@@ -30,10 +29,6 @@ pub trait AbstractChannel {
     fn write_bytes(&mut self, bytes: &[u8]) -> Result<()>;
     /// Flush the channel.
     fn flush(&mut self) -> Result<()>;
-    /// Clone the channel.
-    fn clone(&self) -> Self
-    where
-        Self: Sized;
     /// Read `nbytes` from the channel, and return it as a `Vec`.
     fn read_vec(&mut self, nbytes: usize) -> Result<Vec<u8>> {
         let mut data = vec![0; nbytes];
@@ -172,7 +167,6 @@ pub trait AbstractChannel {
     }
 
     /// Write a `RistrettoPoint` to the channel.
-    #[cfg(feature = "curve25519-dalek")]
     #[inline(always)]
     fn write_pt(&mut self, pt: &RistrettoPoint) -> Result<()> {
         self.write_bytes(pt.compress().as_bytes())?;
@@ -180,12 +174,14 @@ pub trait AbstractChannel {
     }
 
     /// Read a `RistrettoPoint` from the channel.
-    #[cfg(feature = "curve25519-dalek")]
     #[inline(always)]
     fn read_pt(&mut self) -> Result<RistrettoPoint> {
         let mut data = [0u8; 32];
         self.read_bytes(&mut data)?;
-        let pt = match CompressedRistretto::from_slice(&data).decompress() {
+        let pt = match CompressedRistretto::from_slice(&data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+            .decompress()
+        {
             Some(pt) => pt,
             None => {
                 return Err(std::io::Error::new(
@@ -214,11 +210,55 @@ pub trait AbstractChannel {
         Ok(())
     }
 }
+impl<'a, C: AbstractChannel> AbstractChannel for &'a mut C {
+    fn read_bytes(&mut self, bytes: &mut [u8]) -> Result<()> {
+        C::read_bytes(self, bytes)
+    }
+
+    fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        C::write_bytes(self, bytes)
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        C::flush(self)
+    }
+}
+
+impl AbstractChannel for swanky_channel::Channel<'_> {
+    #[inline]
+    fn read_bytes(&mut self, bytes: &mut [u8]) -> Result<()> {
+        swanky_channel::Channel::read_bytes(self, bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }
+
+    #[inline]
+    fn write_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        swanky_channel::Channel::write_bytes(self, bytes)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }
+
+    #[inline]
+    fn flush(&mut self) -> Result<()> {
+        self.force_flush()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }
+}
 
 /// A standard read/write channel that implements `AbstractChannel`.
 pub struct Channel<R, W> {
     reader: Rc<RefCell<R>>,
     writer: Rc<RefCell<W>>,
+}
+
+/// DO NOT USE THIS IMPL EXCEPT IN LEGACY CODE!
+impl<R, W> Clone for Channel<R, W> {
+    /// DO NOT USE THIS IMPL EXCEPT IN LEGACY CODE!
+    fn clone(&self) -> Self {
+        Channel {
+            reader: self.reader.clone(),
+            writer: self.writer.clone(),
+        }
+    }
 }
 
 impl<R: Read, W: Write> Channel<R, W> {
@@ -256,14 +296,6 @@ impl<R: Read, W: Write> AbstractChannel for Channel<R, W> {
     fn flush(&mut self) -> Result<()> {
         self.writer.borrow_mut().flush()
     }
-
-    #[inline(always)]
-    fn clone(&self) -> Self {
-        Self {
-            reader: self.reader.clone(),
-            writer: self.writer.clone(),
-        }
-    }
 }
 
 /// Standard Read/Write channel built from a symmetric stream.
@@ -294,12 +326,5 @@ impl<S: Read + Write> AbstractChannel for SymChannel<S> {
     #[inline(always)]
     fn flush(&mut self) -> Result<()> {
         self.stream.borrow_mut().flush()
-    }
-
-    #[inline(always)]
-    fn clone(&self) -> Self {
-        Self {
-            stream: self.stream.clone(),
-        }
     }
 }

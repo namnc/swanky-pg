@@ -5,18 +5,22 @@ import os
 import typing
 import xml.etree.ElementTree as ET
 from collections import namedtuple
+from functools import cache
 from pathlib import Path
 from uuid import uuid4
 
-from cgtypes import *
+from .cgtypes import *
 
 INTEL_INTRINSICS_XML_XZ = (
     Path(__file__).resolve().parent / "intel-intrinsics-3.4.5.xml.xz"
 )
-with lzma.open(INTEL_INTRINSICS_XML_XZ) as compressed_xml:
-    INTEL_INTRINSICS_XML = {
-        x.get("name"): x for x in ET.parse(compressed_xml).getroot()
-    }
+
+
+@cache
+def intel_intrinsics_xml():
+    with lzma.open(INTEL_INTRINSICS_XML_XZ) as compressed_xml:
+        return {x.get("name"): x for x in ET.parse(compressed_xml).getroot()}
+
 
 if "UOPS_INFO_XML" in os.environ:
     UOPS_INFO_DB = dict()
@@ -67,12 +71,6 @@ if "UOPS_INFO_XML" in os.environ:
             UOPS_INFO_DB[key] = data
 else:
     UOPS_INFO_DB = None
-
-SWANKY_CACHE_DIR = (
-    Path(os.environ["SWANKY_CACHE_DIR"]) / "avx2-uops.info-dbm-cache"
-    if "SWANKY_CACHE_DIR" in os.environ
-    else Path(__file__).resolve().parent
-)
 
 
 def uops_info(iform):
@@ -136,7 +134,7 @@ class IntelInstruction:
 class IntelIntrinsic(namedtuple("IntelIntrinsic", "name")):
     @property
     def xml(self):
-        return INTEL_INTRINSICS_XML[self.name]
+        return intel_intrinsics_xml()[self.name]
 
     def intel_reference_url(self):
         return f"https://software.intel.com/sites/landingpage/IntrinsicsGuide/#text={self.name}"
@@ -186,6 +184,10 @@ def _make_immediate_argument_overrides():
         "_mm256_shuffle_epi32": shuffle,
         "_mm_shuffle_epi32": shuffle,
         "_mm256_permute4x64_epi64": shuffle,
+        "_mm_shufflelo_epi16": shuffle,
+        "_mm256_shufflelo_epi16": shuffle,
+        "_mm_shufflehi_epi16": shuffle,
+        "_mm256_shufflehi_epi16": shuffle,
         "_mm_clmulepi64_si128": clmul,
         "_mm_blend_epi16": blend(8),
         "_mm_blend_epi32": blend(4),
@@ -257,6 +259,8 @@ class IntelIntrinsicBuilder:
             prefix = "_mm256_"
         elif ty.bits == 128:
             prefix = "_mm_"
+        else:
+            assert False, f"unexpected bits in {repr(ty)}"
         if ty.ty.signedness == Signedness.SIGNED:
             iu = "i"
         else:
@@ -274,6 +278,8 @@ class IntelIntrinsicBuilder:
             "andnot",
         ]:
             return f"{prefix}{op}_si{ty.bits}"
+        elif op == "shuffle" and ty.ty.bits == 8:
+            return f"{prefix}shuffle_epi8"
         elif op in [
             "add_lanes",
             "sub_lanes",
@@ -290,6 +296,10 @@ class IntelIntrinsicBuilder:
                 assert ty.ty.signedness == Signedness.SIGNED
             core = op.replace("_lanes", "")
             return f"{prefix}{core}_epi{ty.ty.bits}"
+        elif op in ["shuffle_lo16", "shuffle_hi16"]:
+            assert ty.ty.bits == 16
+            lo_or_hi = "lo" if "lo16" in op else "hi"
+            return f"{prefix}shuffle{lo_or_hi}_epi16"
         elif op == "broadcast_lo":
             return f"{prefix}broadcast{suffixes[ty.ty.bits]}_epi{ty.ty.bits}"
         elif op in ["broadcast", "set"]:
@@ -302,7 +312,7 @@ class IntelIntrinsicBuilder:
             return out
         elif op == "mul_lo_32":
             return f"{prefix}mul_ep{iu}32"
-        elif op in ["max", "min"]:
+        elif op in ["max", "min", "adds", "subs"]:
             return f"{prefix}{op}_ep{iu}{ty.ty.bits}"
         elif op in ["shift_left_const", "shift_right_const"]:
             if "right" in op:
@@ -405,7 +415,7 @@ class IntelIntrinsicBuilder:
 
         line("#![allow(non_upper_case_globals, non_snake_case)]")
         for name in sorted(list(self.needed_intrinsics)):
-            intrinsic = INTEL_INTRINSICS_XML[name]
+            intrinsic = intel_intrinsics_xml()[name]
             assert intrinsic.tag == "intrinsic"
             immediate_override = INTRINSIC_IMMEDIATE_ARGUMENT_OVERRIDES.get(name)
             required_cpuid = set(x.text for x in intrinsic.findall("CPUID"))

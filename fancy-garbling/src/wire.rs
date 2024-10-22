@@ -5,7 +5,10 @@ use fancy_garbling_base_conversion as base_conversion;
 use rand::{CryptoRng, Rng, RngCore};
 use scuttlebutt::{Block, AES_HASH};
 use subtle::ConditionallySelectable;
-use vectoreyes::array_utils::{ArrayUnrolledExt, ArrayUnrolledOps, UnrollableArraySize};
+use vectoreyes::{
+    array_utils::{ArrayUnrolledExt, ArrayUnrolledOps, UnrollableArraySize},
+    SimdBase,
+};
 
 #[cfg(feature = "serde")]
 use crate::errors::{ModQDeserializationError, WireDeserializationError};
@@ -438,7 +441,7 @@ impl WireLabel for WireMod2 {
             panic!("[WireMod2::rand_delta] Expected modulo 2. Got {}", q);
         }
         let mut w = Self::rand(rng, q);
-        w.val = w.val.set_lsb();
+        w.val |= Block::set_lo(1);
         w
     }
 
@@ -453,7 +456,8 @@ impl WireLabel for WireMod2 {
     }
 
     fn color(&self) -> u16 {
-        self.val.lsb() as u16
+        // This extracts the least-significant bit of the U8x16.
+        (self.val.extract::<0>() & 1) as u16
     }
 
     fn plus_eq<'a>(&'a mut self, other: &Self) -> &'a mut Self {
@@ -738,7 +742,7 @@ fn _from_block_lookup(inp: Block, q: u16) -> Vec<u16> {
     let mut ds = base_conversion::lookup_digits_mod_at_position(bytes[15], q, 15).to_vec();
     for i in 0..15 {
         let cs = base_conversion::lookup_digits_mod_at_position(bytes[i], q, i);
-        util::base_q_add_eq(&mut ds, &cs, q);
+        util::base_q_add_eq(&mut ds, cs, q);
     }
     // Drop the digits we won't be able to pack back in again, especially if
     // they get multiplied.
@@ -817,7 +821,7 @@ mod tests {
 
     #[test]
     fn packing() {
-        let ref mut rng = thread_rng();
+        let rng = &mut thread_rng();
         for q in 2..256 {
             for _ in 0..1000 {
                 let w = AllWire::rand(rng, q);
@@ -828,7 +832,7 @@ mod tests {
 
     #[test]
     fn base_conversion_lookup_method() {
-        let ref mut rng = thread_rng();
+        let rng = &mut thread_rng();
         for _ in 0..1000 {
             let q = 5 + (rng.gen_u16() % 110);
             let x = rng.gen_u128();
@@ -856,7 +860,7 @@ mod tests {
 
     #[test]
     fn negation() {
-        let ref mut rng = thread_rng();
+        let rng = &mut thread_rng();
         for _ in 0..1000 {
             let q = rng.gen_modulus();
             let x = AllWire::rand(rng, q);
@@ -1023,7 +1027,10 @@ mod tests {
         let mut rng = thread_rng();
 
         for _ in 0..16 {
-            let q: u16 = rng.gen();
+            let mut q: u16 = rng.gen();
+            while q < 2 {
+                q = rng.gen();
+            }
             let w = WireModQ::rand(&mut rng, q);
             let serialized = serde_json::to_string(&w).unwrap();
 
@@ -1036,7 +1043,10 @@ mod tests {
     #[test]
     fn test_serialize_bad_modQ_mod() {
         let mut rng = thread_rng();
-        let q: u16 = rng.gen();
+        let mut q: u16 = rng.gen();
+        while q < 2 {
+            q = rng.gen();
+        }
 
         let mut w = WireModQ::rand(&mut rng, q);
 

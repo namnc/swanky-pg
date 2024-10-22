@@ -64,7 +64,7 @@ impl Sender {
                 self.oprf.encode(inputs[j], &mut encoded);
                 encoded ^= seeds[bin];
 
-                channel.write_bytes(&encoded.prefix(masksize))?;
+                channel.write_bytes(encoded.prefix(masksize))?;
             }
         }
         channel.flush()?;
@@ -209,8 +209,10 @@ impl Receiver {
                     let val = inputs[item.input_index].clone();
                     let key = &output.as_ref()[masksize..masksize + 16];
                     let payload_bytes = scuttlebutt::utils::xor(ct.as_ref(), key);
-                    let payload =
-                        Block::try_from_slice(&payload_bytes).expect("it is exactly 16 bytes long");
+                    let payload = Block::from(
+                        <[u8; 16]>::try_from(payload_bytes.as_slice())
+                            .expect("it is exactly 16 bytes long"),
+                    );
                     intersection.insert(val, payload);
                 }
             }
@@ -317,7 +319,7 @@ mod tests {
         let mut sender_inputs = rand_vec_vec(SET_SIZE - intersection_size, ITEM_SIZE, &mut rng);
         let mut receiver_inputs = rand_vec_vec(SET_SIZE - intersection_size, ITEM_SIZE, &mut rng);
         sender_inputs.extend(intersection.clone());
-        receiver_inputs.extend(intersection.clone());
+        receiver_inputs.extend(intersection);
 
         let thread_sender_inputs = sender_inputs.clone();
         let handle = std::thread::spawn(move || {

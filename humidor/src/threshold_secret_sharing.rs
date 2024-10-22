@@ -9,8 +9,8 @@
 //! Packed (or ramp) variant of Shamir secret sharing,
 //! allowing efficient sharing of several secrets together.
 
-use scuttlebutt::field::polynomial::NewtonPolynomial;
 use scuttlebutt::field::{fft, fft::FieldForFFT, FiniteField};
+use swanky_polynomial::NewtonPolynomial;
 
 /// Generator for the packed variant of Shamir secret sharing, specifying number
 /// of secrets shared together, total number of shares, and privacy threshold.
@@ -183,12 +183,12 @@ impl<Field: FiniteField + FieldForFFT<2> + FieldForFFT<3>> PackedSecretSharingGe
         // let poly = NewtonPolynomial::init(&points, &values);
         // evaluate at omega_secrets points to recover secrets
         // TODO optimise to avoid re-computation of power
-        let secrets = (1..self.reconstruct_limit())
+
+        (1..self.reconstruct_limit())
             .map(|e| self.omega_secrets.pow(e as u128))
             .map(|point| poly.eval(&values, point))
             .take(self.secret_count)
-            .collect();
-        secrets
+            .collect()
     }
 }
 
@@ -205,24 +205,23 @@ mod tests {
         let mut rng = StdRng::from_entropy();
 
         let pss: PackedSecretSharingGenerator<TestField> = PackedSecretSharingGenerator {
-            /// Maximum number of shares that can be known without exposing the secrets
-            /// (privacy threshold).
+            // Maximum number of shares that can be known without exposing the secrets
+            // (privacy threshold).
             threshold: 15,
-            /// Number of shares to split the secrets into.
+            // Number of shares to split the secrets into.
             share_count: 80,
-            /// Number of secrets to share together.
+            // Number of secrets to share together.
             secret_count: 48,
 
             // implementation configuration
-            /// `m`-th principal root of unity in Zp, where `m = secret_count + threshold + 1`
-            /// must be a power of 2.
-            omega_secrets: TestField::from(<TestField as FieldForFFT<2>>::roots(6)),
-            /// `n`-th principal root of unity in Zp, where `n = share_count + 1` must be a power of 3.
-            omega_shares: TestField::from(<TestField as FieldForFFT<3>>::roots(4)),
+            // `m`-th principal root of unity in Zp, where `m = secret_count + threshold + 1`
+            // must be a power of 2.
+            omega_secrets: <TestField as FieldForFFT<2>>::roots(6),
+            // `n`-th principal root of unity in Zp, where `n = share_count + 1` must be a power of 3.
+            omega_shares: <TestField as FieldForFFT<3>>::roots(4),
         };
 
         let secrets = (0..pss.secret_count as u64)
-            .into_iter()
             .map(|n| {
                 (n as u128)
                     .try_into()

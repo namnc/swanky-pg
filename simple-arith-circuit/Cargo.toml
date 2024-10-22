@@ -8,9 +8,12 @@ license.workspace = true
 publish.workspace = true
 version.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 proptest = ["dep:proptest"]
-serde = ["dep:serde", "scuttlebutt/serde"]
+serde = ["dep:serde"]
 
 [dependencies]
 scuttlebutt.workspace = true

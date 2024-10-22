@@ -1,10 +1,10 @@
+#![allow(clippy::all)]
 use clap::Parser;
 use inferno::Proof;
 use rand::SeedableRng;
 use scuttlebutt::field::F64b;
 use scuttlebutt::{field::FiniteField, AesRng};
 use simple_arith_circuit::Circuit;
-use simple_logger::SimpleLogger;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -143,7 +143,9 @@ struct Args {
 fn main() {
     let args = Args::parse();
     if args.logging {
-        SimpleLogger::new().init().unwrap();
+        env_logger::Builder::from_default_env()
+            .filter_level(log::LevelFilter::Info)
+            .init();
     }
     if args.verifier_only {
         if let Some(filename) = args.filename.as_ref() {

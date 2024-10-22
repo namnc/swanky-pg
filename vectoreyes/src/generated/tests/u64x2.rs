@@ -4,6 +4,7 @@
 use super::scalar;
 use crate::ExtendingCast;
 use crate::SimdBase;
+use crate::SimdBase16;
 use crate::SimdBase32;
 use crate::SimdBase4x;
 use crate::SimdBase4x64;
@@ -11,6 +12,7 @@ use crate::SimdBase64;
 use crate::SimdBase8;
 use crate::SimdBase8x;
 use crate::SimdBaseGatherable;
+use crate::SimdSaturatingArithmetic;
 use proptest::prelude::*;
 use std::ops::*;
 proptest! { #[test] fn test_equality( a in any::<[u64; 2]>(), b in any::<[u64; 2]>(), ) { let scalar_out = { use scalar::*; let a: U64x2 = a.into(); let b: U64x2 = b.into(); a == b }; let platform_out = { use crate::*; let a: U64x2 = a.into(); let b: U64x2 = b.into(); a == b }; prop_assert_eq!(scalar_out, platform_out); } }
@@ -54,7 +56,9 @@ proptest! { #[test] fn test_extending_cast_u32x4( a in any::<[u32; 4]>(), ) { le
 proptest! { #[test] fn test_gather_masked_u64( data_0 in any::<[u64 ; 32]>(), data_1 in any::<[u64 ; 32]>(), data_2 in any::<[u64 ; 32]>(), data_3 in any::<[u64 ; 32]>(), idx_0 in 0..128_u64 , idx_1 in 0..128_u64 , src in any::<[u64; 2]>(), mask in any::<[bool; 2]>(), ) { let mut data = vec![0; 128]; data[0..32].copy_from_slice(&data_0); data[32..64].copy_from_slice(&data_1); data[64..96].copy_from_slice(&data_2); data[96..128].copy_from_slice(&data_3); let idx = [ idx_0, idx_1, ]; let safe_out = [ if mask[0] { data[ usize::try_from(idx_0 ).unwrap() ] } else { src[0] } , if mask[1] { data[ usize::try_from(idx_1 ).unwrap() ] } else { src[1] } , ]; let scalar_out = { use scalar::*; let idx = U64x2::from(idx); unsafe { U64x2::gather_masked( data.as_ptr() , idx, U64x2::from([ ((mask[0] as u64) << 63) as u64, ((mask[1] as u64) << 63) as u64, ]), U64x2::from(src), ) }.as_array() }; let crate_out = { use crate::*; let idx = U64x2::from(idx); unsafe { U64x2::gather_masked( data.as_ptr() , idx, U64x2::from([ ((mask[0] as u64) << 63) as u64, ((mask[1] as u64) << 63) as u64, ]), U64x2::from(src), ) }.as_array() }; prop_assert_eq!(scalar_out, safe_out); prop_assert_eq!(scalar_out, crate_out); } }
 proptest! { #[test] fn test_gather_u64( data_0 in any::<[u64 ; 32]>(), data_1 in any::<[u64 ; 32]>(), data_2 in any::<[u64 ; 32]>(), data_3 in any::<[u64 ; 32]>(), idx_0 in 0..128_u64 , idx_1 in 0..128_u64 , ) { let mut data = vec![0; 128]; data[0..32].copy_from_slice(&data_0); data[32..64].copy_from_slice(&data_1); data[64..96].copy_from_slice(&data_2); data[96..128].copy_from_slice(&data_3); let idx = [ idx_0, idx_1, ]; let safe_out = [ data[ usize::try_from(idx_0 ).unwrap() ] , data[ usize::try_from(idx_1 ).unwrap() ] , ]; let scalar_out = { use scalar::*; let idx = U64x2::from(idx); unsafe { U64x2::gather( data.as_ptr() , idx, ) }.as_array() }; let crate_out = { use crate::*; let idx = U64x2::from(idx); unsafe { U64x2::gather( data.as_ptr() , idx, ) }.as_array() }; prop_assert_eq!(scalar_out, safe_out); prop_assert_eq!(scalar_out, crate_out); } }
 proptest! { #[test] fn test_gather_masked_i64( data_0 in any::<[u64 ; 32]>(), data_1 in any::<[u64 ; 32]>(), data_2 in any::<[u64 ; 32]>(), data_3 in any::<[u64 ; 32]>(), idx_0 in -64..64_i64 , idx_1 in -64..64_i64 , src in any::<[u64; 2]>(), mask in any::<[bool; 2]>(), ) { let mut data = vec![0; 128]; data[0..32].copy_from_slice(&data_0); data[32..64].copy_from_slice(&data_1); data[64..96].copy_from_slice(&data_2); data[96..128].copy_from_slice(&data_3); let idx = [ idx_0, idx_1, ]; let safe_out = [ if mask[0] { data[ usize::try_from(idx_0 + 64 ).unwrap() ] } else { src[0] } , if mask[1] { data[ usize::try_from(idx_1 + 64 ).unwrap() ] } else { src[1] } , ]; let scalar_out = { use scalar::*; let idx = I64x2::from(idx); unsafe { U64x2::gather_masked( data.as_ptr() .offset(64) , idx, U64x2::from([ ((mask[0] as u64) << 63) as u64, ((mask[1] as u64) << 63) as u64, ]), U64x2::from(src), ) }.as_array() }; let crate_out = { use crate::*; let idx = I64x2::from(idx); unsafe { U64x2::gather_masked( data.as_ptr() .offset(64) , idx, U64x2::from([ ((mask[0] as u64) << 63) as u64, ((mask[1] as u64) << 63) as u64, ]), U64x2::from(src), ) }.as_array() }; prop_assert_eq!(scalar_out, safe_out); prop_assert_eq!(scalar_out, crate_out); } }
-proptest! { #[test] fn test_gather_i64( data_0 in any::<[u64 ; 32]>(), data_1 in any::<[u64 ; 32]>(), data_2 in any::<[u64 ; 32]>(), data_3 in any::<[u64 ; 32]>(), idx_0 in -64..64_i64 , idx_1 in -64..64_i64 , ) { let mut data = vec![0; 128]; data[0..32].copy_from_slice(&data_0); data[32..64].copy_from_slice(&data_1); data[64..96].copy_from_slice(&data_2); data[96..128].copy_from_slice(&data_3); let idx = [ idx_0, idx_1, ]; let safe_out = [ data[ usize::try_from(idx_0 + 64 ).unwrap() ] , data[ usize::try_from(idx_1 + 64 ).unwrap() ] , ]; let scalar_out = { use scalar::*; let idx = I64x2::from(idx); unsafe { U64x2::gather( data.as_ptr() .offset(64) , idx, ) }.as_array() }; let crate_out = { use crate::*; let idx = I64x2::from(idx); unsafe { U64x2::gather( data.as_ptr() .offset(64) , idx, ) }.as_array() }; prop_assert_eq!(scalar_out, safe_out); prop_assert_eq!(scalar_out, crate_out); } }
+proptest! { #[test] fn test_gather_i64( data_0 in any::<[u64 ; 32]>(), data_1 in any::<[u64 ; 32]>(), data_2 in any::<[u64 ; 32]>(), data_3 in any::<[u64 ; 32]>(), idx_0 in -64..64_i64 , idx_1 in -64..64_i64 , ) { let mut data = vec![0; 128]; data[0..32].copy_from_slice(&data_0); data[32..64].copy_from_slice(&data_1); data[64..96].copy_from_slice(&data_2); data[96..128].copy_from_slice(&data_3); let idx = [ idx_0, idx_1, ]; let safe_out = [ data[ usize::try_from(idx_0 + 64 ).unwrap() ] , data[ usize::try_from(idx_1 + 64 ).unwrap() ] , ]; let scalar_out = { use scalar::*; let idx = I64x2::from(idx); unsafe { U64x2::gather( data.as_ptr() .offset(64) , idx, ) }.as_array() }; let crate_out = { use crate::*; let idx = I64x2::from(idx); unsafe { U64x2::gather( data.as_ptr() .offset(64) , idx, ) }.as_array() }; prop_assert_eq!(scalar_out, safe_out); prop_assert_eq!(scalar_out, crate_out); } } // Check that the serialized json is the same for both implementations.
+proptest! { #[test] fn test_serde_serialize( a in any::<[u64; 2]>(), ) { let scalar_out = { use scalar::*; let a: U64x2 = a.into(); serde_json::to_string(&a).unwrap() }; let platform_out = { use crate::*; let a: U64x2 = a.into(); serde_json::to_string(&a).unwrap() }; prop_assert_eq!(scalar_out, platform_out); } }
+proptest! { #[test] fn test_serialize_roundtrip( x in any::<[u64; 2]>() ) { let x = crate::U64x2::from_array(x); prop_assert_eq!( serde_json::from_str::<crate::U64x2>(&serde_json::to_string(&x).unwrap()).unwrap(), x ); } }
 #[test]
 fn zero_is_zero() {
     assert!(crate::U64x2::ZERO.is_zero());
@@ -63,4 +67,11 @@ fn zero_is_zero() {
 fn const_matches_from() {
     const ARR: [u64; 2] = [0, 1];
     assert_eq!(crate::U64x2::from(ARR), crate::U64x2::from_array(ARR),);
+}
+#[test]
+fn size_matches_array() {
+    assert_eq!(
+        std::mem::size_of::<crate::U64x2>(),
+        std::mem::size_of::<[u64; 2]>(),
+    );
 }

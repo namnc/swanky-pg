@@ -1,5 +1,5 @@
+#![allow(clippy::all)]
 //! `ocelot` provides oblivious transfer, oblivious PRFs and sVOLE extension.
-#![cfg_attr(feature = "nightly", feature(test))]
 #![allow(clippy::many_single_char_names)]
 #![allow(clippy::type_complexity)]
 #![deny(missing_docs)]
@@ -8,7 +8,6 @@
 mod errors;
 mod utils;
 pub use crate::errors::Error;
-pub mod edabits;
 pub mod oprf;
 pub mod ot;
 pub mod svole;

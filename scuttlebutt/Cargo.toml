@@ -10,17 +10,17 @@ license.workspace = true
 publish.workspace = true
 version.workspace = true
 
+[lints]
+workspace = true
+
 [features]
-ff = ["dep:ff", "dep:ff_codegen", "rand_chacha"]
-nightly = ["curve25519-dalek/nightly", "curve25519-dalek/simd_backend"]
-unstable = []
 serde = []
 
 [dependencies]
-curve25519-dalek = { package = "curve25519-dalek-ng", workspace = true, optional = true }
+curve25519-dalek.workspace = true
 rand.workspace = true
 rand_core.workspace = true
-rand_chacha = { workspace = true, optional = true }
+rand_chacha.workspace = true
 serde.workspace = true
 sha2.workspace = true
 subtle.workspace = true
@@ -28,14 +28,15 @@ generic-array.workspace = true
 smallvec.workspace = true
 bytemuck = { workspace = true, features = ["derive"] }
 vectoreyes.workspace = true
-ndarray.workspace = true
 num-traits.workspace = true
-ff = { workspace = true, features = ["derive"], optional = true }
-
-[build-dependencies]
-ff_codegen = { workspace = true, optional = true }
-tempfile.workspace = true
-sha2.workspace = true
+swanky-serialization.workspace = true
+swanky-field.workspace = true
+swanky-field-f61p.workspace = true
+swanky-field-binary.workspace = true
+swanky-field-fft.workspace = true
+swanky-field-ff-primes.workspace = true
+swanky-channel.workspace = true
+swanky-aes-rng.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
@@ -47,23 +48,7 @@ bincode.workspace = true
 serde = { workspace = true, features = ["derive"] }
 
 [[bench]]
-name = "aes128"
-harness = false
-
-[[bench]]
-name = "aes256"
-harness = false
-
-[[bench]]
-name = "block"
-harness = false
-
-[[bench]]
 name = "block512"
-harness = false
-
-[[bench]]
-name = "commitment"
 harness = false
 
 [[bench]]
@@ -72,8 +57,4 @@ harness = false
 
 [[bench]]
 name = "rand_aes"
-harness = false
-
-[[bench]]
-name = "finite_fields"
 harness = false

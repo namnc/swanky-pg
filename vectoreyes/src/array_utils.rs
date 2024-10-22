@@ -16,18 +16,27 @@
 /// ```
 pub enum ArrayUnrolledOps {}
 
-/// A marker trait you probably won't need to use directly. See the module documentation for
-/// more info.
+/// A marker trait you shouldn't invoke directly. See the module documentation for more info.
 pub trait UnrollableArraySize<const N: usize> {
+    #[doc(hidden)]
     fn array_generate<T, F: FnMut(usize) -> T>(f: F) -> [T; N];
+    #[doc(hidden)]
     fn array_map<T, U, F: FnMut(T) -> U>(arr: [T; N], f: F) -> [U; N];
+    #[doc(hidden)]
     fn array_map_result<T, U, E, F: FnMut(T) -> Result<U, E>>(
         arr: [T; N],
         f: F,
     ) -> Result<[U; N], E>;
+    #[doc(hidden)]
     fn array_fold<T, U, F: FnMut(U, T) -> U>(arr: [T; N], init: U, f: F) -> U;
+    #[doc(hidden)]
     fn array_zip<T1, T2>(arr1: [T1; N], arr2: [T2; N]) -> [(T1, T2); N];
+    #[doc(hidden)]
     fn array_enumerate<T>(arr: [T; N]) -> [(usize, T); N];
+    #[doc(hidden)]
+    fn array_as_ref<T>(arr: &[T; N]) -> [&T; N];
+    #[doc(hidden)]
+    fn array_as_mut<T>(arr: &mut [T; N]) -> [&mut T; N];
 }
 
 /// Manually unrolled operations on arrays.
@@ -93,6 +102,10 @@ pub trait ArrayUnrolledExt<T, const N: usize>: Sized {
     /// );
     /// ```
     fn array_enumerate(self) -> [(usize, T); N];
+    /// Produce an array containing references to the initial array.
+    fn array_as_ref(&self) -> [&T; N];
+    /// Produce an array containing mutable references to the initial array.
+    fn array_as_mut(&mut self) -> [&mut T; N];
 }
 impl<T, const N: usize> ArrayUnrolledExt<T, N> for [T; N]
 where
@@ -122,9 +135,21 @@ where
     fn array_enumerate(self) -> [(usize, T); N] {
         ArrayUnrolledOps::array_enumerate(self)
     }
+    #[inline(always)]
+    fn array_as_ref(&self) -> [&T; N] {
+        ArrayUnrolledOps::array_as_ref(self)
+    }
+    #[inline(always)]
+    fn array_as_mut(&mut self) -> [&mut T; N] {
+        ArrayUnrolledOps::array_as_mut(self)
+    }
 }
 
+/// An array for which vectoreyes has implemented adjacent pairing operations
+///
+/// This is implemented for all arrays of size 0..=32
 pub trait ArrayAdjacentPairs {
+    /// The type contained in this array
     type T;
     /// An array which is `[Self::T; ceil(Self::LEN / 2)]`
     type AdjacentPairs;
@@ -158,4 +183,8 @@ pub trait EvenArrayAdjacentPairs: ArrayAdjacentPairs {
     /// );
     /// ```
     fn pair_adjacent(self) -> Self::AdjacentPairs;
+}
+
+mod impls {
+    include!(concat!(env!("OUT_DIR"), "/array_utils_impls.rs"));
 }

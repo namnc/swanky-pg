@@ -1,7 +1,14 @@
-default:
+normal-test:
   tags: [docker-nix]
-  image: "debian/snapshot:stable-20221004"
+  image: "python:3.12-bullseye"
   interruptible: true
+  variables:
+    GIT_STRATEGY: fetch
+    NIX_REMOTE: daemon
+    TMPDIR: /tmp
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: on_success
   before_script:
     - mkdir -p -m 0755 /nix/var/log/nix/drvs
     - mkdir -p -m 0755 /nix/var/nix/gcroots
@@ -11,26 +18,33 @@ default:
     - mkdir -p -m 1777 /nix/var/nix/gcroots/per-user
     - mkdir -p -m 1777 /nix/var/nix/profiles/per-user
     - mkdir -p -m 0755 /nix/var/nix/profiles/per-user/root
-
-variables:
-  GIT_STRATEGY: clone
-  NIX_REMOTE: daemon
-  SWANKY_CACHE_DIR: /var/lib/swanky-sccache/
-
-normal-test:
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      when: on_success
-  script:
-    - pwd
     - export NIX_PATH="nixpkgs=$PWD/etc/nix/pkgs.nix"
-    - /nix/var/nix/profiles/default/bin/nix-shell etc/ci/main.py
+    - export PATH="/nix/var/nix/profiles/default/bin/:$PATH"
+  script:
+    - ./etc/ci/swanky_releasing_check.sh
+    - ./swanky ci quick --cache-dir /var/lib/swanky-sccache/
 
 nightly-test:
+  image: debian:trixie
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: on_success
+  interruptible: true
+  tags: [linux]
+  timeout: 4h
+  variables:
+    TMPDIR: /tmp
   script:
-    - pwd
-    - export NIX_PATH="nixpkgs=$PWD/etc/nix/pkgs.nix"
-    - /nix/var/nix/profiles/default/bin/nix-shell etc/ci/main.py --nightly
+    - apt-get update && apt-get install -y nix python3 lz4 zstd
+    - bash -c "set -euxo pipefail; ./swanky ci nightly 2>&1 | lz4 > ./log.lz4"
+    - tar -c ./coverage | zstd -9 -T > ./coverage.tar.zst
+  artifacts:
+    paths:
+      - log.lz4
+      - ./coverage/coverage-split
+      - ./coverage.tar.zst
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: ./coverage/coverage-split/*.xml
+    expire_in: 1 week

@@ -1,8 +1,7 @@
 //! Implementation of single-point sVOLE.
 
 use super::{
-    ggm_utils::{ggm, ggm_prime, GgmTemporaryStorage},
-    specialization::NoSpecialization,
+    ggm_utils::{ggm, ggm_prime, ggm_prime_temporary_storage_size, ggm_temporary_storage_size},
     utils::Powers,
 };
 use crate::{
@@ -15,26 +14,26 @@ use rand::{
     CryptoRng, Rng, SeedableRng,
 };
 use scuttlebutt::{
-    commitment::{Commitment, ShaCommitment},
     field::{Degree, FiniteField as FF},
     ring::FiniteRing,
     utils::unpack_bits,
     AbstractChannel, AesRng, Block, Malicious,
 };
-use vectoreyes::{Aes128EncryptOnly, AesBlockCipher};
+use vectoreyes::{Aes128EncryptOnly, AesBlockCipher, U8x16};
 
 pub(super) struct Sender<OT: OtReceiver + Malicious, FE: FF> {
     ot: OT,
-    pows: Powers<FE>,
+    pub(super) pows: Powers<FE>,
     ggm_seeds: (Aes128EncryptOnly, Aes128EncryptOnly),
+    ggm_temporary_storage: Vec<U8x16>,
 }
 
 pub(super) struct Receiver<OT: OtSender + Malicious, FE: FF> {
     ot: OT,
     delta: FE,
-    pows: Powers<FE>,
+    pub(super) pows: Powers<FE>,
     ggm_seeds: (Aes128EncryptOnly, Aes128EncryptOnly),
-    ggm_temporary_storage: GgmTemporaryStorage,
+    ggm_temporary_storage: Vec<U8x16>,
 }
 
 pub(super) type SpsSender<FE> = Sender<KosReceiver, FE>;
@@ -53,9 +52,7 @@ fn eq_send<C: AbstractChannel, FE: FF>(channel: &mut C, x: FE) -> Result<bool, E
     channel.read_bytes(&mut seed)?;
     let y = channel.read_serializable::<FE>()?;
 
-    let mut commit = ShaCommitment::new(seed);
-    commit.input(&y.to_bytes());
-    if commit.finish() == com {
+    if blake3::keyed_hash(&seed, &y.to_bytes()) == com {
         Ok(x == y)
     } else {
         Err(Error::InvalidOpening)
@@ -70,11 +67,9 @@ fn eq_receive<C: AbstractChannel, RNG: CryptoRng + Rng, FE: FF>(
     y: FE,
 ) -> Result<bool, Error> {
     let seed = rng.gen::<[u8; 32]>();
-    let mut h = ShaCommitment::new(seed);
-    h.input(&y.to_bytes());
-    let com = h.finish();
+    let com = blake3::keyed_hash(&seed, &y.to_bytes());
 
-    channel.write_bytes(&com)?;
+    channel.write_bytes(com.as_bytes())?;
     channel.flush()?;
 
     let x = channel.read_serializable::<FE>()?;
@@ -99,12 +94,13 @@ impl<OT: OtReceiver<Msg = Block> + Malicious, FE: FF> Sender<OT, FE> {
         let seed0 = rng.gen::<Block>();
         let seed1 = rng.gen::<Block>();
         let seeds = scuttlebutt::cointoss::send(channel, &[seed0, seed1])?;
-        let aes0 = Aes128EncryptOnly::new_with_key(seeds[0].0);
-        let aes1 = Aes128EncryptOnly::new_with_key(seeds[1].0);
+        let aes0 = Aes128EncryptOnly::new_with_key(seeds[0]);
+        let aes1 = Aes128EncryptOnly::new_with_key(seeds[1]);
         Ok(Self {
             pows,
             ot,
             ggm_seeds: (aes0, aes1),
+            ggm_temporary_storage: Default::default(),
         })
     }
 
@@ -151,24 +147,29 @@ impl<OT: OtReceiver<Msg = Block> + Malicious, FE: FF> Sender<OT, FE> {
         }
 
         let keys = self.ot.receive(channel, &choices, rng)?;
-
         for (i, ((_, w), (alpha, beta))) in base_uws
             .iter()
             .copied()
             .zip(alphas.iter().zip(betas.into_iter()))
             .enumerate()
         {
-            let sum = ggm_prime::<FE, NoSpecialization>(
+            let ot_output = bytemuck::cast_slice(&keys[i * nbits..(i + 1) * nbits]);
+            self.ggm_temporary_storage.resize(
+                ggm_prime_temporary_storage_size(ot_output.len()),
+                U8x16::default(),
+            );
+            let sum = ggm_prime::<FE::PrimeField, FE, (FE::PrimeField, FE)>(
                 *alpha,
-                bytemuck::cast_slice(&keys[i * nbits..(i + 1) * nbits]),
+                ot_output,
                 &self.ggm_seeds,
                 &mut result[i * n..(i + 1) * n],
+                &mut self.ggm_temporary_storage,
             );
             let d: FE = channel.read_serializable()?;
             result[i * n + alpha] = (beta, w - (d + sum));
         }
 
-        self.send_batch_consistency_check(channel, &result, &base_consistency, rng)?;
+        self.send_batch_consistency_check(channel, &result, base_consistency, rng)?;
 
         Ok(result)
     }
@@ -234,6 +235,7 @@ impl<OT: OtReceiver<Msg = Block> + Malicious, FE: FF> Sender<OT, FE> {
             ot,
             pows: self.pows.clone(),
             ggm_seeds: self.ggm_seeds.clone(),
+            ggm_temporary_storage: Default::default(),
         })
     }
 }
@@ -249,8 +251,8 @@ impl<OT: OtSender<Msg = Block> + Malicious, FE: FF> Receiver<OT, FE> {
         let seed0 = rng.gen::<Block>();
         let seed1 = rng.gen::<Block>();
         let seeds = scuttlebutt::cointoss::receive(channel, &[seed0, seed1])?;
-        let aes0 = Aes128EncryptOnly::new_with_key(seeds[0].0);
-        let aes1 = Aes128EncryptOnly::new_with_key(seeds[1].0);
+        let aes0 = Aes128EncryptOnly::new_with_key(seeds[0]);
+        let aes1 = Aes128EncryptOnly::new_with_key(seeds[1]);
         Ok(Self {
             pows,
             delta,
@@ -282,7 +284,9 @@ impl<OT: OtSender<Msg = Block> + Malicious, FE: FF> Receiver<OT, FE> {
         }
         let mut keys = Vec::with_capacity(t * nbits);
         for i in 0..t {
-            let seed = rng.gen::<Block>().0;
+            let seed = rng.gen::<Block>();
+            self.ggm_temporary_storage
+                .resize(ggm_temporary_storage_size(nbits), U8x16::default());
             ggm(
                 nbits,
                 seed,
@@ -295,12 +299,12 @@ impl<OT: OtSender<Msg = Block> + Malicious, FE: FF> Receiver<OT, FE> {
         debug_assert_eq!(keys.len(), t * nbits);
         self.ot.send(channel, &keys, rng)?;
         for (i, gamma) in gammas.into_iter().enumerate() {
-            let d = gamma - result[i * n..(i + 1) * n].iter().map(|v| *v).sum();
+            let d = gamma - result[i * n..(i + 1) * n].iter().copied().sum();
             channel.write_serializable(&d)?;
         }
         channel.flush()?;
 
-        self.receive_batch_consistency_check(channel, &result, &base_consistency, rng)?;
+        self.receive_batch_consistency_check(channel, &result, base_consistency, rng)?;
         Ok(result)
     }
 
@@ -360,7 +364,6 @@ mod test {
     use super::{
         super::{
             base_svole::{Receiver as BaseReceiver, Sender as BaseSender},
-            specialization::NoSpecialization,
             utils::Powers,
         },
         SpsReceiver, SpsSender,
@@ -385,9 +388,7 @@ mod test {
             let writer = BufWriter::new(sender);
             let mut channel = Channel::new(reader, writer);
             let pows = <Powers<_> as Default>::default();
-            let mut base =
-                BaseSender::<FE, NoSpecialization>::init(&mut channel, pows.clone(), &mut rng)
-                    .unwrap();
+            let mut base = BaseSender::<FE>::init(&mut channel, pows.clone(), &mut rng).unwrap();
             let uw = base.send(&mut channel, weight + r, &mut rng).unwrap();
             let mut spsvole = SpsSender::<FE>::init(&mut channel, pows, &mut rng).unwrap();
             spsvole

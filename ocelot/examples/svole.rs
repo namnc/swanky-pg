@@ -1,9 +1,10 @@
-use ocelot::svole::wykw::{LPN_EXTEND_MEDIUM, LPN_SETUP_MEDIUM};
-use ocelot::svole::{
-    wykw::{Receiver, Sender},
-    SVoleReceiver, SVoleSender,
+#![allow(clippy::all)]
+use ocelot::svole::{Receiver, Sender};
+use ocelot::svole::{LPN_EXTEND_MEDIUM, LPN_SETUP_MEDIUM};
+use scuttlebutt::{
+    field::{F40b, F2},
+    AbstractChannel, AesRng,
 };
-use scuttlebutt::{field::F40b, AbstractChannel, AesRng};
 use std::io::{Read, Write};
 use std::{
     io::{BufReader, BufWriter},
@@ -58,25 +59,20 @@ impl<S: Read + Write> AbstractChannel for OurTrackChannel<S> {
     }
 
     #[inline(always)]
-    fn read_bytes(&mut self, mut bytes: &mut [u8]) -> std::io::Result<()> {
+    fn read_bytes(&mut self, bytes: &mut [u8]) -> std::io::Result<()> {
         self.bytes_read += bytes.len() as u64;
-        self.stream_r.read_exact(&mut bytes)
+        self.stream_r.read_exact(bytes)
     }
 
     #[inline(always)]
     fn flush(&mut self) -> std::io::Result<()> {
         self.stream_w.flush()
     }
-
-    fn clone(&self) -> Self {
-        unimplemented!()
-    }
 }
 
 type VSender = Sender<F40b>;
 type VReceiver = Receiver<F40b>;
 
-// <FE: FF, VSender: SVoleSender<Msg = FE>, VReceiver: SVoleReceiver<Msg = FE>>
 fn run() {
     let (sender, receiver) = UnixStream::pair().unwrap();
     let handle = std::thread::spawn(move || {
@@ -95,7 +91,7 @@ fn run() {
         println!("Send time (init): {:?}", start.elapsed());
         let start = Instant::now();
         let mut count = 0;
-        let mut out = Vec::new();
+        let mut out: Vec<(F2, F40b)> = Vec::new();
         for _ in 0..get_trials() {
             vole.send(&mut channel, &mut rng, &mut out).unwrap();
             count += out.len();
@@ -116,8 +112,14 @@ fn run() {
     let mut channel =
         OurTrackChannel::new(receiver.try_clone().unwrap(), receiver.try_clone().unwrap());
     let start = Instant::now();
-    let mut vole =
-        VReceiver::init(&mut channel, &mut rng, LPN_SETUP_MEDIUM, LPN_EXTEND_MEDIUM).unwrap();
+    let mut vole = VReceiver::init(
+        &mut channel,
+        &mut rng,
+        LPN_SETUP_MEDIUM,
+        LPN_EXTEND_MEDIUM,
+        None,
+    )
+    .unwrap();
     println!("Receive time (init): {:?}", start.elapsed());
     println!(
         "Send communication (init): {:.2} Mbits",
@@ -132,7 +134,8 @@ fn run() {
     let mut count = 0;
     let mut out = Vec::new();
     for _ in 0..get_trials() {
-        vole.receive(&mut channel, &mut rng, &mut out).unwrap();
+        vole.receive::<_, F2>(&mut channel, &mut rng, &mut out)
+            .unwrap();
         count += out.len();
         criterion::black_box(&out);
     }
@@ -147,7 +150,7 @@ fn run() {
     );
     channel.clear();
     let start = Instant::now();
-    let _ = vole.duplicate(&mut channel, &mut rng).unwrap();
+    let _ = vole.duplicate::<_, F2>(&mut channel, &mut rng).unwrap();
     println!("Receive time (duplicate): {:?}", start.elapsed());
     println!(
         "Send communication (duplicate): {:.2} Mbits",

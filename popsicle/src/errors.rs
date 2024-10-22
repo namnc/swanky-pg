@@ -1,5 +1,6 @@
-/// Errors produced by the private set intersection protocols.
+//! Errors produced by the private set intersection protocols.
 #[derive(Debug)]
+/// Errors produced by the private set intersection protocols.
 pub enum Error {
     /// Coin tossing failed.
     CoinTossError(scuttlebutt::cointoss::Error),
@@ -22,19 +23,23 @@ pub enum Error {
     PsiProtocolError(String),
     /// Not enough payloads.
     InvalidPayloadsLength,
-    /// SSL Error
-    #[cfg(feature = "psty")]
-    SSLError(openssl::error::ErrorStack),
+    /// AES GCM Error
+    AESGCMError(aes_gcm::Error),
     /// An error occurred in the underlying 2PC protocol.
-    #[cfg(feature = "psty")]
     TwopacError(fancy_garbling::errors::TwopacError),
+    /// The set of payloads is not equal to the set of keys.
+    PayloadSetNotComplete {
+        /// length of the set of payloads
+        npayloads: usize,
+        /// length of the set of primary keys
+        nprimarykeys: usize,
+    },
 }
 
-#[cfg(feature = "psty")]
-impl From<openssl::error::ErrorStack> for Error {
+impl From<aes_gcm::Error> for Error {
     #[inline]
-    fn from(e: openssl::error::ErrorStack) -> Error {
-        Error::SSLError(e)
+    fn from(e: aes_gcm::Error) -> Error {
+        Error::AESGCMError(e)
     }
 }
 
@@ -59,7 +64,6 @@ impl From<scuttlebutt::cointoss::Error> for Error {
     }
 }
 
-#[cfg(feature = "psty")]
 impl From<fancy_garbling::errors::TwopacError> for Error {
     #[inline]
     fn from(e: fancy_garbling::errors::TwopacError) -> Error {
@@ -84,10 +88,16 @@ impl std::fmt::Display for Error {
             ),
             Error::PsiProtocolError(s) => write!(f, "PSI protocol error: {}", s),
             Error::InvalidPayloadsLength => write!(f, "Invalid length of payloads!"),
-            #[cfg(feature = "psty")]
-            Error::SSLError(e) => write!(f, "SSL Error: {}", e),
-            #[cfg(feature = "psty")]
+            Error::AESGCMError(e) => write!(f, "AES GCM Error: {}", e),
             Error::TwopacError(e) => write!(f, "2PC protocol error: {}", e),
+            Error::PayloadSetNotComplete {
+                npayloads,
+                nprimarykeys,
+            } => write!(
+                f,
+                "The set of payloads (len: {}) is not equal to the set of primary keys (len: {})!",
+                npayloads, nprimarykeys
+            ),
         }
     }
 }

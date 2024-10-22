@@ -11,10 +11,11 @@ license.workspace = true
 publish.workspace = true
 version.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 doctest = false
-
-[features]
 
 [dependencies]
 merkle-cbt.workspace = true
@@ -23,7 +24,8 @@ ndarray.workspace = true
 num-traits.workspace = true
 rand.workspace = true
 subtle.workspace = true
-scuttlebutt = { workspace = true, features = ["ff"] }
+scuttlebutt.workspace = true
+swanky-polynomial.workspace = true
 generic-array.workspace = true
 digest.workspace = true
 simple-arith-circuit = { workspace = true, features = ["serde"] }

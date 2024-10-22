@@ -2,17 +2,20 @@
 //! set intersection protocol (cf. <https://eprint.iacr.org/2019/241>).
 
 use crate::{cuckoo::CuckooHash, errors::Error, utils};
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Key, Nonce,
+};
+
 use fancy_garbling::{
     twopac::semihonest::{Evaluator, Garbler},
-    AllWire, ArithmeticBundleGadgets, BinaryBundle, CrtBundle, CrtGadgets, Fancy, FancyBinary,
-    FancyInput,
+    AllWire, BinaryBundle, BinaryBundleGadgets, BinaryGadgets, Fancy, FancyBinary, FancyInput,
 };
 use itertools::Itertools;
 use ocelot::{
     oprf::{KmprtReceiver, KmprtSender},
     ot::{AlszReceiver as OtReceiver, AlszSender as OtSender},
 };
-use openssl::symm::{decrypt, encrypt, Cipher};
 use rand::{CryptoRng, Rng, RngCore, SeedableRng};
 use scuttlebutt::{AbstractChannel, Block, Block512, SemiHonest};
 
@@ -25,6 +28,15 @@ const HASH_SIZE: usize = 4;
 // How many bytes to use to determine whether decryption succeeded in the send/recv
 // payload methods.
 const PAD_LEN: usize = 16;
+
+// This is the size of the authentication tag that is append to AES GCM
+const TAG_SIZE: usize = 16;
+
+// This is the size of the key used by AES GCM
+const KEY_SIZE: usize = 32;
+
+// This is the size of the nonce used by AES GCM
+const NONCE_SIZE: usize = 12;
 
 /// The type of values in the sender and receiver's sets.
 pub type Msg = Vec<u8>;
@@ -123,7 +135,7 @@ impl SenderState {
         Error,
     >
     where
-        C: AbstractChannel,
+        C: AbstractChannel + Clone,
         RNG: RngCore + CryptoRng + SeedableRng<Seed = Block>,
     {
         let mut gb =
@@ -138,7 +150,7 @@ impl SenderState {
     /// Compute the intersection.
     pub fn compute_intersection<C, RNG>(&self, channel: &mut C, rng: &mut RNG) -> Result<(), Error>
     where
-        C: AbstractChannel,
+        C: AbstractChannel + Clone,
         RNG: RngCore + CryptoRng + SeedableRng<Seed = Block>,
     {
         let (mut gb, x, y) = self.compute_setup(channel, rng)?;
@@ -150,12 +162,12 @@ impl SenderState {
     /// Compute the cardinality of the intersection.
     pub fn compute_cardinality<C, RNG>(&self, channel: &mut C, rng: &mut RNG) -> Result<(), Error>
     where
-        C: AbstractChannel,
+        C: AbstractChannel + Clone,
         RNG: RngCore + CryptoRng + SeedableRng<Seed = Block>,
     {
         let (mut gb, x, y) = self.compute_setup(channel, rng)?;
-        let (outs, _) = fancy_compute_cardinality(&mut gb, &x, &y)?;
-        gb.outputs(&outs)?;
+        let result = fancy_compute_cardinality(&mut gb, &x, &y)?;
+        gb.outputs(result.wires())?;
         Ok(())
     }
 
@@ -166,17 +178,24 @@ impl SenderState {
         channel: &mut C,
     ) -> Result<Vec<Vec<u8>>, Error>
     where
-        C: AbstractChannel,
+        C: AbstractChannel + Clone,
     {
         let mut payloads = Vec::new();
         for opprf_output in self.opprf_outputs.iter() {
-            let iv = channel.read_vec(16)?;
-            let ct = channel.read_vec(payload_len + PAD_LEN)?;
-            let key = opprf_output.prefix(16);
-            let mut dec = decrypt(Cipher::aes_128_ctr(), key, Some(&iv), &ct)?;
-            let payload = dec.split_off(PAD_LEN);
-            if dec.into_iter().all(|x| x == 0) {
-                payloads.push(payload)
+            let nonce_bytes = channel.read_vec(NONCE_SIZE)?;
+            let ciphertext = channel.read_vec(payload_len + PAD_LEN + TAG_SIZE)?;
+
+            let key = opprf_output.prefix(KEY_SIZE);
+            let key: &Key<Aes256Gcm> = key.into();
+            let cipher = Aes256Gcm::new(&key);
+
+            let nonce = Nonce::from_slice(&nonce_bytes);
+            match cipher.decrypt(&nonce, ciphertext.as_ref()) {
+                Ok(dec) => {
+                    let payload = dec.to_owned().split_off(PAD_LEN);
+                    payloads.push(payload)
+                }
+                Err(_e) => println!("Unable to decrypt, this item doesn't match!"),
             }
         }
         Ok(payloads)
@@ -245,7 +264,7 @@ impl ReceiverState {
         Error,
     >
     where
-        C: AbstractChannel,
+        C: AbstractChannel + Clone,
         RNG: CryptoRng + RngCore + SeedableRng<Seed = Block>,
     {
         let nbins = self.cuckoo.nbins;
@@ -269,7 +288,7 @@ impl ReceiverState {
         rng: &mut RNG,
     ) -> Result<Vec<Msg>, Error>
     where
-        C: AbstractChannel,
+        C: AbstractChannel + Clone,
         RNG: RngCore + CryptoRng + SeedableRng<Seed = Block>,
     {
         let (mut ev, x, y) = self.compute_setup(channel, rng)?;
@@ -296,17 +315,20 @@ impl ReceiverState {
         rng: &mut RNG,
     ) -> Result<usize, Error>
     where
-        C: AbstractChannel,
+        C: AbstractChannel + Clone,
         RNG: RngCore + CryptoRng + SeedableRng<Seed = Block>,
     {
         let (mut ev, x, y) = self.compute_setup(channel, rng)?;
-        let (outs, mods) = fancy_compute_cardinality(&mut ev, &x, &y)?;
-        let mpc_outs = ev
-            .outputs(&outs)?
+        let result = fancy_compute_cardinality(&mut ev, &x, &y)?;
+        let cardinality_outs = ev
+            .outputs(&result.wires())?
             .expect("evaluator should produce outputs");
 
-        let cardinality = fancy_garbling::util::crt_inv(&mpc_outs, &mods);
-        Ok(cardinality as usize)
+        let mut cardinality = 0;
+        for (i, s) in cardinality_outs.into_iter().enumerate() {
+            cardinality += (s as usize) << i;
+        }
+        Ok(cardinality)
     }
 
     /// Send encrypted payloads to the Receiver, who can only decrypt a payload if they
@@ -318,7 +340,7 @@ impl ReceiverState {
         rng: &mut RNG,
     ) -> Result<(), Error>
     where
-        C: AbstractChannel,
+        C: AbstractChannel + Clone,
         RNG: RngCore + CryptoRng + SeedableRng<Seed = Block>,
     {
         let payload_len = payloads[0].len();
@@ -337,11 +359,18 @@ impl ReceiverState {
             } else {
                 payload.extend_from_slice(&dummy_payload);
             };
-            let iv: [u8; 16] = rng.gen();
-            let key = opprf_output.prefix(16);
-            let ct = encrypt(Cipher::aes_128_ctr(), &key, Some(&iv), &payload)?;
-            channel.write_bytes(&iv)?;
-            channel.write_bytes(&ct)?;
+            let key = opprf_output.prefix(KEY_SIZE);
+            let key: &Key<Aes256Gcm> = key.into();
+
+            let mut nonce_bytes = [0u8; NONCE_SIZE];
+            rng.fill_bytes(&mut nonce_bytes);
+            let nonce = Nonce::from_slice(&nonce_bytes);
+
+            let cipher = Aes256Gcm::new(&key);
+            let ciphertext = cipher.encrypt(&nonce, payload.as_ref())?;
+
+            channel.write_bytes(&nonce)?;
+            channel.write_bytes(&ciphertext)?;
         }
         channel.flush()?;
         Ok(())
@@ -360,7 +389,7 @@ fn encode_inputs(opprf_outputs: &[Block512]) -> Vec<u16> {
 }
 
 /// Fancy function to compute the intersection and return encoded vector of 0/1 masks.
-fn fancy_compute_intersection<F: Fancy + ArithmeticBundleGadgets>(
+fn fancy_compute_intersection<F: Fancy + BinaryBundleGadgets>(
     f: &mut F,
     sender_inputs: &[F::Item],
     receiver_inputs: &[F::Item],
@@ -370,7 +399,7 @@ fn fancy_compute_intersection<F: Fancy + ArithmeticBundleGadgets>(
         .chunks(HASH_SIZE * 8)
         .zip_eq(receiver_inputs.chunks(HASH_SIZE * 8))
         .map(|(xs, ys)| {
-            f.eq_bundles(
+            f.bin_eq_bundles(
                 &BinaryBundle::new(xs.to_vec()),
                 &BinaryBundle::new(ys.to_vec()),
             )
@@ -378,41 +407,39 @@ fn fancy_compute_intersection<F: Fancy + ArithmeticBundleGadgets>(
         .collect()
 }
 
-/// Fancy function to compute the cardinaility and return CRT value containing the result
-/// along with the moduli of that value.
-fn fancy_compute_cardinality<F: Fancy + ArithmeticBundleGadgets + FancyBinary>(
+/// Fancy function to compute the cardinality
+fn fancy_compute_cardinality<F: Fancy + BinaryBundleGadgets + FancyBinary>(
     f: &mut F,
     sender_inputs: &[F::Item],
     receiver_inputs: &[F::Item],
-) -> Result<(Vec<F::Item>, Vec<u16>), F::Error> {
+) -> Result<BinaryBundle<F::Item>, F::Error> {
     assert_eq!(sender_inputs.len(), receiver_inputs.len());
 
     let eqs = sender_inputs
         .chunks(HASH_SIZE * 8)
         .zip_eq(receiver_inputs.chunks(HASH_SIZE * 8))
         .map(|(xs, ys)| {
-            f.eq_bundles(
+            f.bin_eq_bundles(
                 &BinaryBundle::new(xs.to_vec()),
                 &BinaryBundle::new(ys.to_vec()),
             )
         })
         .collect::<Result<Vec<F::Item>, F::Error>>()?;
 
-    let qs = fancy_garbling::util::primes_with_width(16);
-    let q = fancy_garbling::util::product(&qs);
-    let mut acc = f.crt_constant_bundle(0, q)?;
-    let one = f.crt_constant_bundle(1, q)?;
+    let mut acc = f.bin_constant_bundle(0, HASH_SIZE * 8)?;
 
     for b in eqs.into_iter() {
+        let one = f.bin_constant_bundle(1, HASH_SIZE * 8)?;
         let b_ws = one
             .iter()
-            .map(|w| f.mul(w, &b))
-            .collect::<Result<Vec<F::Item>, F::Error>>()?;
-        let b_crt = CrtBundle::new(b_ws);
-        acc = f.crt_add(&acc, &b_crt)?;
+            .map(|w| f.and(w, &b))
+            .collect::<Result<Vec<_>, _>>()?;
+        let b_binary = BinaryBundle::new(b_ws);
+
+        acc = f.bin_addition_no_carry(&acc, &b_binary)?;
     }
 
-    Ok((acc.wires().to_vec(), qs))
+    Ok(acc)
 }
 
 impl SemiHonest for Sender {}
@@ -429,15 +456,11 @@ mod tests {
     };
 
     const ITEM_SIZE: usize = 8;
-    const SET_SIZE: usize = 1000;
+    const SET_SIZE: usize = 1 << 6;
+    const NUM_DIFF: usize = 10;
 
-    #[test]
-    fn full_protocol() {
-        let mut rng = AesRng::new();
+    fn psty_cardinality(sender_inputs: Vec<Vec<u8>>, receiver_inputs: Vec<Vec<u8>>) -> usize {
         let (sender, receiver) = UnixStream::pair().unwrap();
-        let sender_inputs = rand_vec_vec(SET_SIZE, ITEM_SIZE, &mut rng);
-        let receiver_inputs = sender_inputs.clone();
-
         std::thread::spawn(move || {
             let mut rng = AesRng::new();
             let reader = BufReader::new(sender.try_clone().unwrap());
@@ -458,9 +481,95 @@ mod tests {
         let state = psi
             .receive(&receiver_inputs, &mut channel, &mut rng)
             .unwrap();
-        let cardinality = state.compute_cardinality(&mut channel, &mut rng).unwrap();
+        state.compute_cardinality(&mut channel, &mut rng).unwrap()
+    }
 
+    #[test]
+    fn psty_test_cardinality_same_sets() {
+        let mut rng = AesRng::new();
+
+        let sender_inputs = rand_vec_vec(SET_SIZE, ITEM_SIZE, &mut rng);
+        let receiver_inputs = sender_inputs.clone();
+
+        let cardinality = psty_cardinality(sender_inputs, receiver_inputs);
         assert_eq!(cardinality, SET_SIZE);
+    }
+
+    #[test]
+    fn psty_test_cardinality_disjoint_sets() {
+        let sender_inputs: Vec<Vec<u8>> = (0..SET_SIZE)
+            .map(|i: usize| i.to_le_bytes().to_vec())
+            .collect_vec();
+
+        // We are assuming here that the set sizes are not too big
+        // and that we can represent two disjoint sets using the
+        // available bits of precisions. This is okay because sets
+        // larger than that would need to be handle differently at
+        // the level of the psi protocol.
+        let receiver_inputs = (0..SET_SIZE)
+            .map(|i: usize| (i + SET_SIZE).to_le_bytes().to_vec())
+            .collect_vec();
+
+        let cardinality = psty_cardinality(sender_inputs, receiver_inputs);
+
+        assert_eq!(cardinality, 0);
+    }
+
+    #[test]
+    fn psty_test_cardinality_subsets_different_set_size() {
+        if SET_SIZE >= NUM_DIFF {
+            let mut rng = AesRng::new();
+            let sender_inputs: Vec<Vec<u8>> = rand_vec_vec(SET_SIZE, ITEM_SIZE, &mut rng);
+            let mut receiver_inputs = vec![vec![0; ITEM_SIZE]; SET_SIZE - NUM_DIFF];
+            receiver_inputs.clone_from_slice(&sender_inputs[NUM_DIFF..]);
+
+            let cardinality = psty_cardinality(sender_inputs, receiver_inputs);
+
+            assert_eq!(cardinality, SET_SIZE - NUM_DIFF);
+        }
+    }
+
+    #[test]
+    // test fancy cardinality for sets that only differ in a few elements
+    fn psty_test_cardinality_few_elements_diff() {
+        let mut rng = AesRng::new();
+        let sender_inputs: Vec<Vec<u8>> = rand_vec_vec(SET_SIZE, ITEM_SIZE, &mut rng);
+        let mut receiver_inputs = sender_inputs.clone();
+
+        for i in 0..NUM_DIFF {
+            // change the value of the first byte at that index,
+            // if its above 0, set it to 0, otherwise set it to 1.
+            // this ensures that
+            // receiver_inputs[differing_index] != sender_inputs[differing_index]
+            receiver_inputs[i][0] = if receiver_inputs[i][0] > 0 { 0 } else { 1 };
+        }
+
+        let cardinality = psty_cardinality(sender_inputs, receiver_inputs);
+        assert_eq!(cardinality, SET_SIZE - NUM_DIFF);
+    }
+
+    #[test]
+    fn psty_test_cardinality_random_sets() {
+        let mut rng = AesRng::new();
+
+        let sender_inputs = rand_vec_vec(SET_SIZE, ITEM_SIZE, &mut rng);
+        let receiver_inputs = rand_vec_vec(SET_SIZE, ITEM_SIZE, &mut rng);
+
+        let cardinality = psty_cardinality(sender_inputs.clone(), receiver_inputs.clone());
+
+        let mut true_cardinality = 0;
+        for (s, r) in sender_inputs.iter().zip(receiver_inputs) {
+            let mut s_buf = [0u8; 8];
+            s_buf[..8].copy_from_slice(&s[..8]);
+            let s_64 = u64::from_le_bytes(s_buf);
+
+            let mut r_buf = [0u8; 8];
+            r_buf[..8].copy_from_slice(&r[..8]);
+            let r_64 = u64::from_le_bytes(r_buf);
+
+            true_cardinality += if s_64 == r_64 { 1 } else { 0 };
+        }
+        assert_eq!(cardinality, true_cardinality);
     }
 
     #[test]

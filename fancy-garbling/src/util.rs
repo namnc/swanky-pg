@@ -130,7 +130,7 @@ pub fn from_base_q(ds: &[u16], q: u16) -> u128 {
     let mut x = 0u128;
     for &d in ds.iter().rev() {
         let (xp, overflow) = x.overflowing_mul(q.into());
-        debug_assert_eq!(overflow, false, "overflow!!!! x={}", x);
+        debug_assert!(!overflow, "overflow!!!! x={}", x);
         x = xp + d as u128;
     }
     x
@@ -141,7 +141,7 @@ pub fn from_mixed_radix(digits: &[u16], radii: &[u16]) -> u128 {
     let mut x: u128 = 0;
     for (&d, &q) in digits.iter().zip(radii.iter()).rev() {
         let (xp, overflow) = x.overflowing_mul(q as u128);
-        debug_assert_eq!(overflow, false, "overflow!!!! x={}", x);
+        debug_assert!(!overflow, "overflow!!!! x={}", x);
         x = xp + d as u128;
     }
     x
@@ -492,31 +492,5 @@ mod tests {
             let z = from_base_q(&y, q);
             assert_eq!(x, z);
         }
-    }
-}
-
-#[cfg(all(feature = "nightly", test))]
-mod benchmarks {
-    extern crate test;
-    use super::*;
-    use test::Bencher;
-
-    #[bench]
-    fn bench_tweak(b: &mut Bencher) {
-        let i = test::black_box(rand::random::<usize>());
-        b.iter(|| {
-            let b = test::black_box(tweak(i));
-            test::black_box(b)
-        });
-    }
-
-    #[bench]
-    fn bench_tweak2(b: &mut Bencher) {
-        let i = test::black_box(rand::random::<u64>());
-        let j = test::black_box(rand::random::<u64>());
-        b.iter(|| {
-            let b = test::black_box(tweak2(i, j));
-            test::black_box(b)
-        });
     }
 }

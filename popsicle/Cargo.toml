@@ -10,12 +10,10 @@ license.workspace = true
 publish.workspace = true
 version.workspace = true
 
-[lib]
+[lints]
+workspace = true
 
-[features]
-nightly = ["scuttlebutt/nightly", "ocelot/nightly", "ocelot/nightly"]
-psty = ["fancy-garbling", "openssl"]
-psty_payload = ["fancy-garbling", "serde", "serde_json", "fancy-garbling/serde"]
+[lib]
 
 [dependencies]
 ocelot.workspace = true
@@ -23,11 +21,12 @@ scuttlebutt.workspace = true
 itertools.workspace = true
 rand.workspace = true
 sha2.workspace = true
-fancy-garbling = { workspace = true, optional = true }
-openssl        = { workspace = true, optional = true }
-serde          = { workspace = true, features = ["derive"], optional = true }
-serde_json     = { workspace = true, optional = true }
-
+aes-gcm.workspace = true
+fancy-garbling = { workspace = true, features = ["serde"]}
+serde          = { workspace = true, features = ["derive"]}
+serde_json     = { workspace = true}
+proptest = { workspace = true}
+vectoreyes.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 
@@ -38,17 +37,19 @@ harness = false
 [[bench]]
 name = "psty"
 harness = false
-required-features = ["psty"]
 
 [[bench]]
 name = "psty_payload"
 harness = false
-required-features = ["psty_payload"]
 
 [[example]]
 name = "psty"
-required-features = ["psty"]
 
 [[example]]
 name = "psty-payload"
-required-features = ["psty"]
+
+[[example]]
+name = "circuit_psi_cardinality"
+
+[[example]]
+name = "circuit_psi_payload_sum"

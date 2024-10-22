@@ -11,11 +11,13 @@ license.workspace = true
 publish.workspace = true
 version.workspace = true
 
+[lints]
+workspace = true
+
 [lib]
 doctest = false
 
 [features]
-nightly = ["scuttlebutt/nightly"]
 serde = ["dep:serde", "dep:serde_json", "scuttlebutt/serde"]
 
 [dependencies]
@@ -24,6 +26,7 @@ scuttlebutt.workspace = true
 ocelot.workspace = true
 vectoreyes.workspace = true
 itertools.workspace = true
+clap.workspace = true
 rand.workspace = true
 regex.workspace = true
 subtle.workspace = true

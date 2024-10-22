@@ -38,7 +38,7 @@ impl OtSender for Sender {
         mut rng: &mut RNG,
     ) -> Result<Self, Error> {
         let y = Scalar::random(&mut rng);
-        let s = &y * &RISTRETTO_BASEPOINT_TABLE;
+        let s = &y * RISTRETTO_BASEPOINT_TABLE;
         channel.write_pt(&s)?;
         channel.flush()?;
         Ok(Self { y, s, counter: 0 })
@@ -55,8 +55,8 @@ impl OtSender for Sender {
             .map(|i| {
                 let r = channel.read_pt()?;
                 let yr = self.y * r;
-                let k0 = Block::hash_pt(self.counter + i as u128, &yr);
-                let k1 = Block::hash_pt(self.counter + i as u128, &(yr - ys));
+                let k0 = super::hash_pt(self.counter + i as u128, &yr);
+                let k1 = super::hash_pt(self.counter + i as u128, &(yr - ys));
                 Ok((k0, k1))
             })
             .collect::<Result<Vec<(Block, Block)>, Error>>()?;
@@ -102,17 +102,17 @@ impl OtReceiver for Receiver {
         inputs: &[bool],
         mut rng: &mut RNG,
     ) -> Result<Vec<Block>, Error> {
-        let zero = &Scalar::zero() * &self.s;
-        let one = &Scalar::one() * &self.s;
+        let zero = &Scalar::ZERO * &self.s;
+        let one = &Scalar::ONE * &self.s;
         let ks = inputs
             .iter()
             .enumerate()
             .map(|(i, b)| {
                 let x = Scalar::random(&mut rng);
                 let c = if *b { one } else { zero };
-                let r = c + &x * &RISTRETTO_BASEPOINT_TABLE;
+                let r = c + &x * RISTRETTO_BASEPOINT_TABLE;
                 channel.write_pt(&r)?;
-                Ok(Block::hash_pt(self.counter + i as u128, &(&x * &self.s)))
+                Ok(super::hash_pt(self.counter + i as u128, &(&x * &self.s)))
             })
             .collect::<Result<Vec<Block>, Error>>()?;
         channel.flush()?;

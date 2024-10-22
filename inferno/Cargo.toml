@@ -9,6 +9,9 @@ license.workspace = true
 publish.workspace = true
 version.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 bincode.workspace = true
@@ -19,16 +22,17 @@ log.workspace = true
 parking_lot.workspace = true
 rand.workspace = true
 rayon.workspace = true
-scuttlebutt = { workspace = true, features = ["serde"] }
+scuttlebutt.workspace = true
+swanky-polynomial.workspace = true
 serde = { workspace = true, features = ["derive"] }
 simple-arith-circuit = { workspace = true, features = ["serde"] }
-simple_logger.workspace = true
 snafu.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true
 serde_json.workspace = true
+env_logger.workspace = true
 
 [[bench]]
 name = "random_circuit"
